@@ -1,0 +1,633 @@
+---
+title: "Finals"
+author: "Tanush Shetty"
+email : "ts1333@scarletmail.rutgers.edu"
+date: "09/12/2024"
+output: html_document
+---
+
+```{r}
+library(fpp)
+library(fpp2)
+library(dplyr)
+library(forecast)
+library(ggplot2)
+library(readr)
+
+# import data
+car_sales_data <- read_csv("C:/Users/tanus/Downloads/TOTALSA.csv", col_names = FALSE)
+
+# Rename columns
+colnames(car_sales_data) <- c("Date", "Sales")
+
+print("Column Names:")
+print(names(car_sales_data)) 
+
+# Remove leading and trailing whitespace from Date values (if any)
+car_sales_data$Date <- trimws(car_sales_data$Date)
+
+# Convert Date column to Date type with proper format
+car_sales_data$Date <- as.Date(car_sales_data$Date, format="%m/%d/%Y")
+
+str(car_sales_data)
+
+head(car_sales_data)
+
+car_sales_data <- na.omit(car_sales_data)
+
+
+# Sort the data by date (in case it's not in chronological order)
+car_sales_data <- car_sales_data[order(car_sales_data$Date), ]
+
+
+# Check start date to ensure no NA is present
+start_year <- as.numeric(format(min(car_sales_data$Date, na.rm=TRUE), "%Y"))
+start_month <- as.numeric(format(min(car_sales_data$Date, na.rm=TRUE), "%m"))
+
+# Verify that start_year and start_month are not NA
+if (is.na(start_year) | is.na(start_month)) {
+  print(paste("Start year is:", start_year, "and start month is:", start_month))
+  stop("Start year or start month is NA. Check the Date column for missing or incorrect values.")
+}
+
+# Create a time series object for the 'Sales' column
+# Assumption: Data is monthly, so we set frequency = 12 (12 months in a year)
+car_sales_ts <- ts(car_sales_data$Sales, 
+                   start = c(start_year, start_month), 
+                   frequency = 12)
+
+# Plot the time series to visualize the trend and seasonality
+plot(car_sales_ts, main="U.S. Car Sales (in Millions)", xlab="Year", ylab="Sales (Millions)")
+
+# Print a summary of the time series to check its structure
+summary(car_sales_ts)
+
+# Filter Post-2021 Data:
+# 
+# Focus on data from January 2021 onward to capture the stabilized period after the pandemic's initial shock.
+# Use this filtered dataset to build and validate your forecast.
+# Filter data to include only post-2021 observations
+
+car_sales_filtered <- subset(car_sales_data, Date >= as.Date("2021-01-01"))
+
+# Create a time series object for the filtered data
+start_year <- as.numeric(format(min(car_sales_filtered$Date), "%Y"))
+start_month <- as.numeric(format(min(car_sales_filtered$Date), "%m"))
+
+car_sales_ts_filtered <- ts(car_sales_data$Sales, 
+                             start = c(start_year, start_month), 
+                             frequency = 12)
+
+# Plot the filtered time series
+plot(car_sales_ts_filtered, main="Filtered U.S. Car Sales (Post-2021)", 
+     xlab="Year", ylab="Sales (Millions)")
+
+# Convert Sales to numeric (if not already numeric)
+car_sales_filtered$Sales <- as.numeric(car_sales_filtered$Sales)
+
+# Check for NA values introduced during conversion
+if (any(is.na(car_sales_filtered$Sales))) {
+  cat("Warning: Non-numeric values were found in the Sales column and converted to NA.\n")
+  # Display rows with NA in the Sales column for debugging
+  print(car_sales_filtered[is.na(car_sales_filtered$Sales), ])
+}
+
+# Remove rows with NA values in Sales 
+car_sales_filtered <- na.omit(car_sales_filtered)
+
+# Calculate summary statistics for the Sales column
+summary_stats <- summary(car_sales_filtered$Sales)
+
+# Extract specific statistics
+min_value <- summary_stats["Min."]
+max_value <- summary_stats["Max."]
+mean_value <- mean(car_sales_filtered$Sales, na.rm = TRUE)
+median_value <- summary_stats["Median"]
+q1 <- summary_stats["1st Qu."]
+q3 <- summary_stats["3rd Qu."]
+
+# Print the summary statistics
+cat("Summary Statistics:\n")
+cat("Minimum:", min_value, "\n")
+cat("Maximum:", max_value, "\n")
+cat("Mean:", mean_value, "\n")
+cat("Median:", median_value, "\n")
+cat("1st Quartile (Q1):", q1, "\n")
+cat("3rd Quartile (Q3):", q3, "\n")
+
+# Create a box plot for the Sales column
+boxplot(car_sales_filtered$Sales, 
+        main = "Box Plot of U.S. Car Sales (in Millions)", 
+        xlab = "Sales (in Millions)", 
+        horizontal = TRUE, 
+        col = "orange", 
+        border = "black")
+
+# The sales data is relatively stable, with no extreme anomalies or disruptions.
+# The slight positive skew and consistent spread in the IQR suggest moderate seasonality or cyclical patterns.
+
+car_sales_ts_filtered <- na.omit(car_sales_ts_filtered)
+
+stl_decomposed <- stl(car_sales_ts_filtered, s.window = "periodic")
+plot(stl_decomposed, main = "STL Decomposition of U.S. Car Sales Time Series")
+
+# Yes, the time series is seasonal. The seasonal component displays consistent, repeating patterns, likely corresponding to specific times of the year (e.g., holiday seasons, end-of-year promotions, or other cyclical factors affecting car sales). This seasonality should be accounted for in any forecasting model applied to the dataset.
+
+# The decomposition is additive. If the data required a multiplicative decomposition (e.g., seasonal variation scaled with the trend), the seasonality and residuals would show proportional changes over time.
+
+# Extract seasonal component from STL decomposition
+seasonal_indices <- stl_decomposed$time.series[, "seasonal"]
+
+# Group seasonal values by month and calculate their averages
+monthly_indices <- tapply(seasonal_indices, cycle(car_sales_ts_filtered), mean)
+
+# Print the seasonal monthly indices
+cat("Seasonal Monthly Indices:\n")
+print(monthly_indices)
+
+# High Sales in January: Likely due to promotions, tax refunds, and new models.
+# Low Sales in April: Could be due to post-holiday financial caution, tax season priorities, or lack of promotional activities.
+
+# Convert to numeric 
+car_sales_ts_filtered <- as.numeric(car_sales_ts_filtered)
+seasonal_indices <- as.numeric(seasonal_indices)
+
+# Convert to ts objects
+car_sales_ts_filtered <- ts(car_sales_ts_filtered, 
+                             start = start(car_sales_ts_filtered), 
+                             frequency = frequency(car_sales_ts_filtered))
+
+seasonal_indices_ts <- ts(seasonal_indices, 
+                          start = start(car_sales_ts_filtered), 
+                          frequency = frequency(car_sales_ts_filtered))
+
+# Remove NA values
+car_sales_ts_filtered <- na.omit(car_sales_ts_filtered)
+seasonal_indices_ts <- na.omit(seasonal_indices_ts)
+
+# Subtract the seasonal component from the original time series
+deseasonalized_ts <- car_sales_ts_filtered - seasonal_indices_ts
+
+# Plot the actual and deseasonalized time series
+plot(car_sales_ts_filtered, type = "l", col = "blue", lwd = 2,
+     main = "Actual vs. Seasonally Adjusted Time Series",
+     ylab = "Car Sales (in Millions)", xlab = "Time")
+lines(deseasonalized_ts, col = "red", lwd = 2, lty = 2)
+legend("topright", legend = c("Actual", "Seasonally Adjusted"), 
+       col = c("blue", "red"), lty = c(1, 2), lwd = c(2, 2))
+
+# Seasonality has a moderate impact: While there are observable seasonal variations, they are not significant compared to the larger trends and residual fluctuations.
+
+# Apply the naive method
+naive_forecast <- naive(car_sales_ts_filtered, h = 12)  # Forecast for the next 12 months
+
+# Plot the forecast
+plot(naive_forecast, 
+     main = "Naïve Forecast for U.S. Car Sales",
+     ylab = "Car Sales (in Millions)",
+     xlab = "Time")
+
+print(naive_forecast)
+
+# Calculate residuals from the naive forecast
+naive_residuals <- residuals(naive_forecast)
+
+# Plot residuals
+plot(naive_residuals, 
+     main = "Residuals of Naïve Forecast", 
+     ylab = "Residuals", 
+     xlab = "Time", 
+     col = "blue", 
+     type = "p")
+abline(h = 0, col = "red", lty = 2)
+
+# The residual plot confirms that the naïve method is a reasonable baseline model for this data.
+# However, since the naïve method is simple and ignores trends or seasonality, it may not perform well if the time series exhibits these patterns
+
+# Histogram of residuals
+hist(naive_residuals, 
+     main = "Histogram of Residuals", 
+     xlab = "Residuals", 
+     col = "lightblue", 
+     border = "black")
+
+
+# The histogram suggests that the errors are randomly distributed, supporting the validity of the naïve method as a simple forecasting benchmark.The small spread and centering around zero indicate that the naïve forecast is performing reasonably well for this dataset, despite its simplicity.
+
+# Extract fitted values from the naive forecast
+fitted_values <- fitted(naive_forecast)
+
+# Plot fitted values vs residuals
+plot(fitted_values, naive_residuals, 
+     main = "Fitted Values vs. Residuals",
+     xlab = "Fitted Values",
+     ylab = "Residuals",
+     col = "blue", pch = 19)
+abline(h = 0, col = "red", lty = 2)
+
+# The naïve method performs reasonably well as a baseline model. The residuals do not show systematic biases or patterns, suggesting that the model assumptions hold.
+# However, the presence of a few larger residuals (outliers) suggests that the naïve method may not handle all variations in the data, particularly during periods of abrupt changes or anomalies.
+
+# Extract actual values from the original time series
+actual_values <- car_sales_ts_filtered
+
+# Plot actual values vs residuals
+plot(actual_values, naive_residuals, 
+     main = "Actual Values vs. Residuals",
+     xlab = "Actual Values",
+     ylab = "Residuals",
+     col = "blue", pch = 19)
+abline(h = 0, col = "red", lty = 2)
+
+# The plot confirms that the naïve method works as a reasonable baseline model for this data, with residuals showing randomness and no clear bias.The presence of outliers and occasional large residuals indicates that the naïve method struggles with abrupt changes or anomalies in the time series.While the residuals are randomly scattered, the naïve method does not account for trends or seasonality, which might improve forecast accuracy.
+
+# Remove NA values from residuals
+naive_residuals_clean <- na.omit(naive_residuals)
+
+# Plot the ACF of the cleaned residuals
+acf(naive_residuals_clean, 
+    main = "ACF of Residuals (Naïve Forecast)", 
+    lag.max = 20)  
+
+# The naïve method assumes that the last observed value is the best forecast, but the significant autocorrelation at lag 1 suggests that the method has left some structure in the residuals unexplained.
+# This could indicate that there are trends, seasonality, or other dependencies in the data that require a more advanced forecasting model.
+
+# Compute accuracy measures
+accuracy_measures <- accuracy(naive_forecast)
+
+# Print the accuracy measures
+print(accuracy_measures)
+
+# Load forecast package
+library(forecast)
+
+# Forecast for the next 12 months (assuming monthly data)
+forecast_naive <- forecast(naive_forecast, h = 12)
+
+# Display forecast values in a table
+forecast_table <- data.frame(
+  Month = seq.Date(from = as.Date("2024-01-01"), by = "month", length.out = 12),
+  Forecast = round(forecast_naive$mean, 2),
+  Lower_80 = round(forecast_naive$lower[, 1], 2),  # 80% prediction interval
+  Upper_80 = round(forecast_naive$upper[, 1], 2),  # 80% prediction interval
+  Lower_95 = round(forecast_naive$lower[, 2], 2),  # 95% prediction interval
+  Upper_95 = round(forecast_naive$upper[, 2], 2)   # 95% prediction interval
+)
+
+# Print the forecast table
+print(forecast_table)
+
+# Plot the forecast
+plot(forecast_naive, 
+     main = "Naïve Forecast for Next Year",
+     xlab = "Time",
+     ylab = "Car Sales (in Millions)",
+     col = "blue")
+
+# The naïve method works well as a baseline model, particularly when the time series lacks clear trends or seasonality.
+# However, for datasets with trends or seasonal patterns, it may not provide highly accurate results, as it doesn't account for these structures.
+# The naïve forecast predicts that the time series values for the entire forecast horizon (next year) will remain constant, equal to the last observed value of the dataset.
+
+# Plot the original time series (Simple Moving Averages)
+plot(car_sales_ts_filtered, 
+     main = "Time Series with Simple Moving Averages", 
+     ylab = "Car Sales (in Millions)", 
+     xlab = "Time", 
+     col = "black", 
+     lwd = 2, 
+     type = "l")
+
+# Add Simple Moving Average (Order = 3)
+sma3 <- ma(car_sales_ts_filtered, order = 3)
+lines(sma3, col = "red", lwd = 2, lty = 1)  # Red line for SMA(3)
+
+# Add Simple Moving Average (Order = 6)
+sma6 <- ma(car_sales_ts_filtered, order = 6)
+lines(sma6, col = "blue", lwd = 2, lty = 2)  # Blue line for SMA(6)
+
+# Add Simple Moving Average (Order = 9)
+sma9 <- ma(car_sales_ts_filtered, order = 9)
+lines(sma9, col = "green", lwd = 2, lty = 3)  # Green line for SMA(9)
+
+# Add legend
+legend("topright", 
+       legend = c("Original", "SMA(3)", "SMA(6)", "SMA(9)"),
+       col = c("black", "red", "blue", "green"), 
+       lty = c(1, 1, 2, 3), 
+       lwd = c(2, 2, 2, 2))
+
+# Forecast using SMA(6)
+sma6_forecast <- tail(sma6, 1)  # Last value of SMA(6) as the forecast
+forecast_values <- rep(sma6_forecast, 12)  # Repeat for next 12 months
+
+# Create a time series for the forecast
+forecast_ts <- ts(forecast_values, 
+                  start = c(2024, 1), 
+                  frequency = 12)
+
+# Combine historical data and forecast for plotting
+combined_ts <- ts(c(car_sales_ts_filtered, forecast_ts), 
+                  start = start(car_sales_ts_filtered), 
+                  frequency = frequency(car_sales_ts_filtered))
+
+# Plot the combined time series with forecast
+plot(combined_ts, 
+     main = "Forecast Using SMA(6)", 
+     ylab = "Car Sales (in Millions)", 
+     xlab = "Time", 
+     col = "black", 
+     lwd = 2, 
+     type = "l")
+lines(forecast_ts, col = "blue", lwd = 2, lty = 2)
+legend("topright", 
+       legend = c("Historical Data", "Forecast (SMA(6))"), 
+       col = c("black", "blue"), 
+       lty = c(1, 2), 
+       lwd = c(2, 2))
+
+# As the moving average order increases (from 3 to 6 to 9), the time series becomes progressively smoother.
+# Higher-order moving averages reduce short-term fluctuations, making the trend in the data clearer.
+# With higher orders, the moving average lags behind the actual time series, especially during sharp changes.
+
+# simple exponential smoothing 
+simple_smoothing <- ses(car_sales_ts_filtered, h = 12)
+
+# Display the model summary
+summary(simple_smoothing)
+
+# Alpha:
+# 
+# The model's high alpha value (0.9999) ensures that it closely follows recent changes in the data, making it highly sensitive to the most recent observation.
+# 
+# Initial State:
+# 
+# The initial state of 16.9706 reflects the early level of the time series and serves as the foundation for the iterative smoothing process.
+# 
+# Sigma:
+# 
+# While the sigma value indicates some forecast errors, it is not excessively high, suggesting the model provides reasonable accuracy.
+
+# Plot the forecast
+plot(simple_smoothing, 
+     main = "Simple Exponential Smoothing Forecast",
+     ylab = "Car Sales (in Millions)", 
+     xlab = "Time")
+
+# Extract residuals from the simple smoothing model
+simple_residuals <- residuals(simple_smoothing)
+
+# Plot residuals over time
+plot(simple_residuals, 
+     main = "Residuals of Simple Exponential Smoothing", 
+     ylab = "Residuals", 
+     xlab = "Time", 
+     col = "blue", 
+     type = "p")
+abline(h = 0, col = "red", lty = 2)
+
+# The model performs well for this dataset, as there is no systematic bias or structure left in the residuals.
+# The presence of a few large residuals indicates that the model may struggle during periods of abrupt changes or anomalies in the data.
+
+# Histogram of residuals
+hist(simple_residuals, 
+     main = "Histogram of Residuals", 
+     xlab = "Residuals", 
+     col = "lightblue", 
+     border = "black")
+
+# The model captures the time series well, with forecast errors centered around zero and relatively small for most observations.While the overall distribution is normal, the presence of outliers suggests the model may struggle during certain periods, likely due to abrupt changes or unusual behavior in the time series.The approximately normal and symmetric distribution confirms that the simple exponential smoothing model provides a good fit for the dataset.
+
+# Extract fitted values from the model
+fitted_values <- fitted(simple_smoothing)
+
+# Plot fitted values vs residuals
+plot(fitted_values, simple_residuals, 
+     main = "Fitted Values vs. Residuals", 
+     xlab = "Fitted Values", 
+     ylab = "Residuals", 
+     col = "blue", pch = 19)
+abline(h = 0, col = "red", lty = 2)
+
+# The random scatter and lack of patterns confirm that the simple exponential smoothing model is a reasonable fit for this dataset.The model does not appear to systematically over- or under-forecast across the fitted value range.
+# The presence of outliers suggests occasional poor model performance for certain observations, likely caused by abrupt changes or anomalies in the time series.The consistent spread of residuals indicates that the model performs similarly across the entire range of fitted values.
+
+# Plot actual values vs residuals
+plot(car_sales_ts_filtered, simple_residuals, 
+     main = "Actual Values vs. Residuals", 
+     xlab = "Actual Values", 
+     ylab = "Residuals", 
+     col = "blue", pch = 19)
+abline(h = 0, col = "red", lty = 2)
+
+# The plot confirms that the simple exponential smoothing model performs well, as the residuals are randomly distributed and show no systematic biases or trends. The consistent variance across actual values further supports the model's reliability.While the overall performance is good, the presence of outliers indicates potential model limitations during periods of sudden changes or unusual observations in the time series.
+
+# ACF of residuals
+acf(simple_residuals, 
+    main = "ACF of Residuals (Simple Exponential Smoothing)", 
+    lag.max = 20)
+
+# The significant autocorrelation at lag 1 suggests that the simple exponential smoothing model has not fully captured some short-term patterns in the data.Despite this, the lack of significant autocorrelations at higher lags suggests that the residuals are close to white noise for most lags.The residual correlation at lag 1 indicates the presence of short-term dependencies that the model has failed to account for.This may affect the model's ability to forecast accurately over very short horizons.
+
+# Display accuracy measures for the simple exponential smoothing model
+accuracy_measures <- accuracy(simple_smoothing)
+print(accuracy_measures)
+
+# Generate forecast for the next 12 months
+forecast_values <- forecast(simple_smoothing, h = 12)
+
+# Create a forecast table
+forecast_table <- data.frame(
+  Month = seq.Date(from = as.Date("2024-01-01"), by = "month", length.out = 12),
+  Forecast = round(forecast_values$mean, 2),
+  Lower_80 = round(forecast_values$lower[, 1], 2),
+  Upper_80 = round(forecast_values$upper[, 1], 2),
+  Lower_95 = round(forecast_values$lower[, 2], 2),
+  Upper_95 = round(forecast_values$upper[, 2], 2)
+)
+print(forecast_table)
+
+# Plot the forecast
+plot(forecast_values, 
+     main = "Simple Exponential Smoothing Forecast for Next Year", 
+     ylab = "Car Sales (in Millions)", 
+     xlab = "Time", 
+     col = "blue")
+
+# Accuracy: The model provides good short-term accuracy, as indicated by the low MAPE and unbiased residuals.
+# Forecast: Predicts a constant value of 16.19 million car sales per month for the next year.
+
+# Set the frequency to 12 for monthly data
+car_sales_ts_filtered <- ts(car_sales_ts_filtered, frequency = 12, start = c(2021, 1))
+
+# Holt-Winters model
+holt_winters_model <- hw(car_sales_ts_filtered, seasonal = "additive", h = 12)
+
+# Display model summary
+summary(holt_winters_model)
+
+# 1. Alpha (Level Smoothing): 0.9999
+# High weight on recent observations; the model is highly responsive to changes in the level.
+# 2. Beta (Trend Smoothing): 0.0041
+# Low weight on recent changes; assumes the trend evolves slowly.
+# 3. Gamma (Seasonality Smoothing): 0.0001
+# Low weight on seasonal changes; assumes stable and consistent seasonality.
+# 4. Initial States
+# Level (l): 17.365 – Starting value for the smoothed time series.
+# Trend (b): -0.0539 – Slight initial downward slope in the trend.
+# Seasonality (s): Adjustments per month, e.g., 0.22 (Mar) and -0.5333 (Sep), indicating above- or below-average sales.
+# 5. Sigma: 1.3535
+# Residual standard deviation; indicates moderate forecast error.
+
+# Plot the forecast
+plot(holt_winters_model, 
+     main = "Holt-Winters Forecast for Next Year", 
+     ylab = "Car Sales (in Millions)", 
+     xlab = "Time")
+
+
+# Extract residuals
+hw_residuals <- residuals(holt_winters_model)
+
+# Plot residuals over time
+plot(hw_residuals, 
+     main = "Residuals of Holt-Winters' Additive Method", 
+     ylab = "Residuals", 
+     xlab = "Time", 
+     col = "blue", 
+     type = "p")
+abline(h = 0, col = "red", lty = 2)
+
+# The random distribution of residuals confirms that the model captures the overall structure (level, trend, and seasonality) of the data effectively.
+# The presence of outliers suggests occasional challenges in capturing unexpected deviations or noise in the data.
+
+# Histogram of residuals
+hist(hw_residuals, 
+     main = "Histogram of Residuals", 
+     xlab = "Residuals", 
+     col = "lightblue", 
+     border = "black")
+
+# The roughly normal distribution and concentration of residuals around zero confirm that the model performs well in capturing the underlying patterns of the time series.The presence of outliers suggests the model might occasionally fail to capture extreme deviations in the data.
+
+# Extract fitted values
+hw_fitted <- fitted(holt_winters_model)
+
+# Plot fitted values vs residuals
+plot(hw_fitted, hw_residuals, 
+     main = "Fitted Values vs. Residuals", 
+     xlab = "Fitted Values", 
+     ylab = "Residuals", 
+     col = "blue", 
+     pch = 19)
+abline(h = 0, col = "red", lty = 2)
+
+# The random scatter confirms that the Holt-Winters model captures the underlying patterns of the data without systematic bias.
+# The lack of trends or clusters in residuals suggests the model assumptions are appropriate.Outliers indicate some periods where the model struggled to predict accurately, likely due to anomalies or sudden changes in the time series.
+
+# Plot actual values vs residuals
+plot(car_sales_ts_filtered, hw_residuals, 
+     main = "Actual Values vs. Residuals", 
+     xlab = "Actual Values", 
+     ylab = "Residuals", 
+     col = "blue", 
+     pch = 19)
+abline(h = 0, col = "red", lty = 2)
+
+# The random scatter of residuals confirms that the Holt-Winters model adequately captures the main patterns in the data, including level, trend, and seasonality.The presence of outliers suggests occasional difficulties in forecasting during periods of sudden changes or irregular behavior in the time series.
+
+# ACF of residuals
+acf(hw_residuals, 
+    main = "ACF of Residuals (Holt-Winters' Additive Method)", 
+    lag.max = 20)
+
+# The significant autocorrelation at lag 1 suggests that the Holt-Winters' additive method may not fully capture short-term dependencies or local variations in the time series.However, the randomness at higher lags indicates that the model adequately captures longer-term structures.Addressing the lag 1 autocorrelation could improve the model's short-term forecasting accuracy.
+
+# Display accuracy metrics for the Holt-Winters model
+accuracy_measures <- accuracy(holt_winters_model)
+print(accuracy_measures)
+
+# Forecast for the next 12 months
+hw_forecast <- forecast(holt_winters_model, h = 12)
+
+# Create a forecast table
+forecast_table <- data.frame(
+  Month = seq.Date(from = as.Date("2026-03-01"), by = "month", length.out = 12),
+  Forecast = round(hw_forecast$mean, 2),
+  Lower_80 = round(hw_forecast$lower[, 1], 2),
+  Upper_80 = round(hw_forecast$upper[, 1], 2),
+  Lower_95 = round(hw_forecast$lower[, 2], 2),
+  Upper_95 = round(hw_forecast$upper[, 2], 2)
+)
+print(forecast_table)
+
+# Plot the forecast
+plot(hw_forecast, 
+     main = "Holt-Winters Forecast for Next Year", 
+     ylab = "Car Sales (in Millions)", 
+     xlab = "Time", 
+     col = "blue")
+
+# The Holt-Winters' additive model performs well, with low forecast errors and good residual behavior, making it a reliable forecasting technique for this dataset.
+# 
+# Point Forecast for February 2027: 15.63 million car sales.The forecast indicates relatively stable car sales with slight seasonal variation over the next year.
+
+# ARIMA
+# Load necessary package
+library(tseries)
+
+# Perform the ADF test
+adf_test <- adf.test(car_sales_ts_filtered)
+
+# Print ADF test result
+print(adf_test)
+
+# The p-value 0.09624 is greater than 0.05, so we fail to reject the null hypothesis that the series is non-stationary.
+# Conclusion: The time series is non-stationary
+
+# Determine the number of differences needed
+required_differences <- ndiffs(car_sales_ts_filtered)
+
+# Print the result
+print(paste("Number of differences needed:", required_differences))
+
+# Number of differences needed: 0 or 1.
+
+# First difference the time series
+car_sales_diff <- diff(car_sales_ts_filtered)
+
+# Perform ADF test on the differenced series
+adf_test_diff <- adf.test(car_sales_diff)
+print(adf_test_diff)
+
+# After applying one difference, the series is confirmed stationary with the ADF test.
+
+# STL Decomposition to check seasonality
+stl_decomp <- stl(car_sales_ts_filtered, s.window = "periodic")
+plot(stl_decomp)
+
+# Plot the differenced series
+plot(car_sales_diff, 
+     main = "Differenced Time Series", 
+     ylab = "Differenced Sales", 
+     xlab = "Time", 
+     col = "blue", 
+     type = "o")
+
+# Plot ACF and PACF
+par(mfrow = c(1, 2))  # Display side-by-side plots
+
+# ACF plot
+acf(car_sales_diff, 
+    main = "ACF of Differenced Series", 
+    lag.max = 20)
+
+# PACF plot
+pacf(car_sales_diff, 
+     main = "PACF of Differenced Series", 
+     lag.max = 20)
+
+par(mfrow = c(1, 1))  # Reset plot layout
+
+
+
+```
